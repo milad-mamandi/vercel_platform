@@ -3,6 +3,7 @@ import { decryptToken, encryptToken } from '../../lib/token-crypto.js';
 import { validateTokenAndFetchMetadata } from '../../lib/vercel-api.js';
 
 export const createEncryptedConnectionToken = (token: string) => encryptToken(token);
+export const decryptConnectionToken = (encryptedToken: string) => decryptToken(encryptedToken);
 
 export const revalidateConnection = async (prisma: PrismaClient, connectionId: string) => {
   const existing = await prisma.vercelConnection.findUnique({ where: { id: connectionId } });

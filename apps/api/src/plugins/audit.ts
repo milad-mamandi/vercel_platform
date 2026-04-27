@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import fp from 'fastify-plugin';
 
 export default fp(async (app) => {
@@ -7,7 +8,7 @@ export default fp(async (app) => {
       action: string;
       entityType: string;
       entityId?: string;
-      metadata?: Record<string, unknown>;
+      metadata?: Prisma.InputJsonValue;
     }) => {
       await app.prisma.auditEvent.create({
         data: {
@@ -15,7 +16,7 @@ export default fp(async (app) => {
           action: payload.action,
           entityType: payload.entityType,
           entityId: payload.entityId,
-          metadata: payload.metadata
+          metadata: payload.metadata as Prisma.InputJsonValue | undefined
         }
       });
     }

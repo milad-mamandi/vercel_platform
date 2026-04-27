@@ -5,6 +5,7 @@ import { Redis } from 'ioredis';
 import { env } from '../env.js';
 import { PrismaClient } from '@prisma/client';
 import { revalidateConnection } from '../modules/vercel/service.js';
+import { syncUsageSnapshot } from '../modules/vercel/usage.js';
 
 const connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const prisma = new PrismaClient();
@@ -28,7 +29,7 @@ const worker = new Worker(
 
     const deployment = await prisma.deploymentJob.findUnique({
       where: { id: payload.deploymentId },
-      include: { template: true }
+      include: { template: true, templateVersion: true }
     });
 
     if (!deployment) {
@@ -41,7 +42,8 @@ const worker = new Worker(
 
       await mkdir(env.TEMPLATE_ARTIFACT_DIR, { recursive: true });
       const renderedPath = join(env.TEMPLATE_ARTIFACT_DIR, `rendered-${deployment.id}.json`);
-      const templateSource = await readFile(deployment.template.artifactPath, 'utf8').catch(() => '{}');
+      const artifactPath = deployment.templateVersion?.artifactPath ?? deployment.template.artifactPath;
+      const templateSource = await readFile(artifactPath, 'utf8').catch(() => '{}');
       const rendered = {
         templateSource,
         payload: deployment.renderPayload,
@@ -94,6 +96,11 @@ const worker = new Worker(
 
       await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { status: 'ready', errorMessage: null } });
       await appendLog(deployment.id, 'Deployment reached READY status');
+      await connectionJobsQueue.add(
+        'sync-vercel-usage',
+        { connectionId: deployment.connectionId, queuedAt: new Date().toISOString(), triggeredBy: 'deployment-ready' },
+        { removeOnComplete: 100, removeOnFail: 500 }
+      );
       return { deploymentId: deployment.id, stage: 'ready' };
     }
 
@@ -157,7 +164,13 @@ const connectionWorker = new Worker(
     }
 
     if (job.name === 'sync-vercel-usage') {
-      return { accepted: true, note: 'Usage sync worker placeholder until Milestone 4' };
+      const payload = job.data as { connectionId?: string };
+      if (!payload.connectionId) {
+        return { skipped: true, reason: 'missing_connection_id' };
+      }
+
+      const snapshot = await syncUsageSnapshot(prisma, payload.connectionId);
+      return { connectionId: payload.connectionId, snapshotId: snapshot?.id ?? null };
     }
 
     return { skipped: true, reason: `unsupported_job_${job.name}` };

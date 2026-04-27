@@ -57,7 +57,7 @@ model AuditEvent {
 }
 
 model VercelConnection {
-  id                String   @id @default(cuid())
+  id                String          @id @default(cuid())
   userId            String
   name              String
   vercelUserId      String?
@@ -67,60 +67,119 @@ model VercelConnection {
   teamSlug          String?
   plan              String?
   encryptedToken    String
-  tokenStatus       String   @default("valid")
+  tokenStatus       String          @default("valid")
   lastValidatedAt   DateTime?
   lastHealthCheckAt DateTime?
   lastUsageSyncAt   DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
-  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deployments DeploymentJob[]
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments    DeploymentJob[]
+  usageSnapshots UsageSnapshot[]
+  usageServices  UsageService[]
 
   @@index([userId])
 }
 
 model DeploymentTemplate {
-  id               String   @id @default(cuid())
-  userId           String
-  name             String
-  description      String?
-  sourceType       String
-  artifactPath     String
-  variablesSchema  Json?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id              String                      @id @default(cuid())
+  userId          String
+  name            String
+  description     String?
+  sourceType      String
+  artifactPath    String
+  variablesSchema Json?
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
 
-  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User                        @relation(fields: [userId], references: [id], onDelete: Cascade)
   deployments DeploymentJob[]
+  versions    DeploymentTemplateVersion[]
 
   @@index([userId])
 }
 
-model DeploymentJob {
-  id                    String   @id @default(cuid())
-  userId                String
-  templateId            String
-  connectionId          String
-  name                  String
-  target                String   @default("preview")
-  status                String   @default("queued")
-  renderPayload         Json?
-  renderedArtifactPath  String?
-  deploymentUrl         String?
-  deploymentDomain      String?
-  providerDeploymentId  String?
-  logs                  Json?
-  errorMessage          String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+model DeploymentTemplateVersion {
+  id              String   @id @default(cuid())
+  templateId      String
+  version         Int
+  artifactPath    String
+  variablesSchema Json?
+  changelog       String?
+  createdAt       DateTime @default(now())
 
-  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  template   DeploymentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  connection VercelConnection   @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  template    DeploymentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  deployments DeploymentJob[]
+
+  @@unique([templateId, version])
+  @@index([templateId])
+}
+
+model DeploymentJob {
+  id                   String   @id @default(cuid())
+  userId               String
+  templateId           String
+  templateVersionId    String?
+  connectionId         String
+  name                 String
+  target               String   @default("preview")
+  status               String   @default("queued")
+  renderPayload        Json?
+  renderedArtifactPath String?
+  deploymentUrl        String?
+  deploymentDomain     String?
+  providerDeploymentId String?
+  logs                 Json?
+  errorMessage         String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user            User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template        DeploymentTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateVersion DeploymentTemplateVersion? @relation(fields: [templateVersionId], references: [id], onDelete: SetNull)
+  connection      VercelConnection           @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([templateId])
+  @@index([templateVersionId])
   @@index([connectionId])
   @@index([status])
+}
+
+model UsageSnapshot {
+  id           String   @id @default(cuid())
+  connectionId String
+  periodStart  DateTime
+  periodEnd    DateTime
+  source       String
+  rawPayload   Json
+  createdAt    DateTime @default(now())
+
+  connection VercelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  services   UsageService[]
+
+  @@index([connectionId, createdAt])
+}
+
+model UsageService {
+  id                 String   @id @default(cuid())
+  snapshotId         String
+  connectionId       String
+  periodStart        DateTime
+  periodEnd          DateTime
+  serviceName        String
+  quantity           Float
+  unit               String
+  includedLimit      Float?
+  estimatedRemaining Float?
+  effectiveCost      Float?
+  billedCost         Float?
+  createdAt          DateTime @default(now())
+
+  snapshot UsageSnapshot    @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  connection VercelConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([snapshotId])
+  @@index([connectionId, serviceName, createdAt])
 }
