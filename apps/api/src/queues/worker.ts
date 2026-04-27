@@ -41,7 +41,13 @@ const worker = new Worker(
 
       await mkdir(env.TEMPLATE_ARTIFACT_DIR, { recursive: true });
       const renderedPath = join(env.TEMPLATE_ARTIFACT_DIR, `rendered-${deployment.id}.json`);
-      const templateSource = await readFile(deployment.template.artifactPath, 'utf8').catch(() => '{}');
+      let templateSource: string;
+      try {
+        templateSource = await readFile(deployment.template.artifactPath, 'utf8');
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : 'unknown read error';
+        throw new Error(`Unable to read template artifact at ${deployment.template.artifactPath}: ${reason}`);
+      }
       const rendered = {
         templateSource,
         payload: deployment.renderPayload,
