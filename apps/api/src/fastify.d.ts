@@ -12,7 +12,7 @@ declare module 'fastify' {
         action: string;
         entityType: string;
         entityId?: string;
-        metadata?: Record<string, unknown>;
+        metadata?: Prisma.InputJsonValue;
       }) => Promise<void>;
     };
     queues: {

@@ -34,18 +34,18 @@ This checklist reflects current implementation status in this repo as of 2026-04
 
 ## Milestone 4: Usage Tracking
 
-- [ ] Usage snapshot/service models and migrations
-- [ ] Worker job for real `vercel usage --format json`
-- [ ] Service normalization and quota remaining calculations
-- [ ] Usage summary/services/history API
-- [ ] Usage dashboard UI cards/charts/filters
+- [x] Usage snapshot/service models and migrations
+- [x] Worker job for real `vercel usage --format json`
+- [x] Service normalization and quota remaining calculations
+- [x] Usage summary/services/history API
+- [x] Usage dashboard UI cards/charts/filters
 
 ## Milestone 5: Template Versioning
 
-- [ ] Template version model + endpoints
-- [ ] Payload schema validation for deployment requests
-- [ ] Render preview endpoint + UI
-- [ ] Retry deployment from prior template version
+- [x] Template version model + endpoints
+- [x] Payload schema validation for deployment requests
+- [x] Render preview endpoint + UI
+- [x] Retry deployment from prior template version
 
 ## Milestone 6: Simulator Lab
 

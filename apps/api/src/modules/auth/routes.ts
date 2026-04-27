@@ -111,7 +111,7 @@ const authRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get('/api/auth/me', { preHandler: [app.authenticate] }, async (request, reply) => {
-    const subject = String(request.user.sub);
+    const subject = String((request.user as { sub: string }).sub);
 
     const user = await app.prisma.user.findUnique({
       where: { id: subject },

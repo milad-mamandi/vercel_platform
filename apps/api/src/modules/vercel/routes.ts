@@ -48,7 +48,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
 
     instance.post('/api/vercel/connections', async (request, reply) => {
       const body = createConnectionSchema.parse(request.body);
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
       const connection = await instance.prisma.vercelConnection.create({
         data: {
           userId,
@@ -89,7 +89,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
     });
 
     instance.get('/api/vercel/connections', async (request) => {
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
 
       const connections = await instance.prisma.vercelConnection.findMany({
         where: { userId },
@@ -116,7 +116,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
     });
 
     instance.get('/api/vercel/connections/:id', async (request, reply) => {
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
       const { id } = paramsSchema.parse(request.params);
 
       const connection = await instance.prisma.vercelConnection.findFirst({
@@ -147,7 +147,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
     });
 
     instance.patch('/api/vercel/connections/:id', async (request, reply) => {
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
       const { id } = paramsSchema.parse(request.params);
       const body = updateConnectionSchema.parse(request.body);
 
@@ -189,7 +189,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
     });
 
     instance.post('/api/vercel/connections/:id/validate', async (request, reply) => {
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
       const { id } = paramsSchema.parse(request.params);
 
       const existing = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
@@ -214,7 +214,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
     });
 
     instance.post('/api/vercel/connections/:id/sync-usage', async (request, reply) => {
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
       const { id } = paramsSchema.parse(request.params);
 
       const existing = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
@@ -222,35 +222,14 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(404).send({ message: 'Connection not found' });
       }
 
-      const syncedAt = new Date();
-
-      const updated = await instance.prisma.vercelConnection.update({
-        where: { id },
-        data: { lastUsageSyncAt: syncedAt },
-        select: {
-          id: true,
-          name: true,
-          vercelUserId: true,
-          vercelEmail: true,
-          vercelUsername: true,
-          teamId: true,
-          teamSlug: true,
-          plan: true,
-          tokenStatus: true,
-          lastValidatedAt: true,
-          lastHealthCheckAt: true,
-          lastUsageSyncAt: true,
-          createdAt: true,
-          updatedAt: true
-        }
-      });
+      const queuedAt = new Date();
 
       await instance.queues.connectionQueue.add(
         'sync-vercel-usage',
         {
           connectionId: id,
           requestedByUserId: userId,
-          queuedAt: syncedAt.toISOString()
+          queuedAt: queuedAt.toISOString()
         },
         {
           removeOnComplete: 100,
@@ -263,17 +242,114 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         action: 'vercel.connection.sync_usage',
         entityType: 'vercel_connection',
         entityId: id,
-        metadata: { queuedAt: syncedAt.toISOString() }
+        metadata: { queuedAt: queuedAt.toISOString() }
       });
 
       return reply.status(202).send({
         message: 'Usage sync queued',
-        connection: redactConnection(updated)
+        connection: redactConnection(existing)
       });
     });
 
+
+    instance.get('/api/vercel/connections/:id/usage/summary', async (request, reply) => {
+      const userId = String((request.user as { sub: string }).sub);
+      const { id } = paramsSchema.parse(request.params);
+
+      const connection = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
+      if (!connection) {
+        return reply.status(404).send({ message: 'Connection not found' });
+      }
+
+      const latestSnapshot = await instance.prisma.usageSnapshot.findFirst({
+        where: { connectionId: id },
+        orderBy: { createdAt: 'desc' },
+        include: { services: true }
+      });
+
+      if (!latestSnapshot) {
+        return { connectionId: id, hasData: false, services: [] };
+      }
+
+      const services = latestSnapshot.services.map((service) => ({
+        serviceName: service.serviceName,
+        quantity: service.quantity,
+        unit: service.unit,
+        includedLimit: service.includedLimit,
+        estimatedRemaining: service.estimatedRemaining,
+        percentUsed:
+          typeof service.includedLimit === 'number' && service.includedLimit > 0
+            ? Math.min((service.quantity / service.includedLimit) * 100, 100)
+            : null
+      }));
+
+      return {
+        connectionId: id,
+        hasData: true,
+        snapshotId: latestSnapshot.id,
+        periodStart: latestSnapshot.periodStart,
+        periodEnd: latestSnapshot.periodEnd,
+        createdAt: latestSnapshot.createdAt,
+        services
+      };
+    });
+
+    instance.get('/api/vercel/connections/:id/usage/services', async (request, reply) => {
+      const userId = String((request.user as { sub: string }).sub);
+      const { id } = paramsSchema.parse(request.params);
+
+      const connection = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
+      if (!connection) {
+        return reply.status(404).send({ message: 'Connection not found' });
+      }
+
+      const query = z
+        .object({
+          days: z.coerce.number().int().min(1).max(365).default(30),
+          serviceName: z.string().trim().min(1).optional()
+        })
+        .parse(request.query);
+
+      const since = new Date(Date.now() - query.days * 24 * 60 * 60 * 1000);
+      const items = await instance.prisma.usageService.findMany({
+        where: {
+          connectionId: id,
+          createdAt: { gte: since },
+          ...(query.serviceName ? { serviceName: query.serviceName } : {})
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      return items;
+    });
+
+    instance.get('/api/vercel/connections/:id/usage/history', async (request, reply) => {
+      const userId = String((request.user as { sub: string }).sub);
+      const { id } = paramsSchema.parse(request.params);
+
+      const connection = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
+      if (!connection) {
+        return reply.status(404).send({ message: 'Connection not found' });
+      }
+
+      const query = z.object({ limit: z.coerce.number().int().min(1).max(90).default(20) }).parse(request.query);
+
+      const snapshots = await instance.prisma.usageSnapshot.findMany({
+        where: { connectionId: id },
+        orderBy: { createdAt: 'desc' },
+        take: query.limit,
+        include: {
+          services: {
+            select: { serviceName: true, quantity: true, unit: true, includedLimit: true, estimatedRemaining: true }
+          }
+        }
+      });
+
+      return snapshots;
+    });
+
     instance.delete('/api/vercel/connections/:id', async (request, reply) => {
-      const userId = String(request.user.sub);
+      const userId = String((request.user as { sub: string }).sub);
       const { id } = paramsSchema.parse(request.params);
 
       const existing = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
