@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import { z } from 'zod';
 import { env } from '../../env.js';
 
@@ -330,60 +331,74 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({ message: (error as Error).message });
       }
 
-      if (idempotencyKey) {
+      const includeDeploymentRelations = {
+        template: { select: { name: true } },
+        templateVersion: { select: { version: true } },
+        connection: { select: { name: true } }
+      } as const;
+
+      let deployment;
+      let wasCreated = false;
+      try {
+        deployment = await instance.prisma.deploymentJob.create({
+          data: {
+            userId,
+            templateId: body.templateId,
+            templateVersionId: templateVersion.id,
+            connectionId: body.connectionId,
+            name: body.name,
+            idempotencyKey,
+            target: body.target,
+            status: 'queued',
+            renderPayload: body.renderPayload as object | undefined,
+            logs: [{ at: new Date().toISOString(), message: `Deployment queued for template version ${templateVersion.version}` }]
+          },
+          include: includeDeploymentRelations
+        });
+        wasCreated = true;
+      } catch (error) {
+        const isIdempotencyConflict =
+          idempotencyKey &&
+          error instanceof PrismaClientKnownRequestError &&
+          error.code === 'P2002';
+
+        if (!isIdempotencyConflict) {
+          throw error;
+        }
+
         const existing = await instance.prisma.deploymentJob.findFirst({
           where: { userId, idempotencyKey },
-          include: {
-            template: { select: { name: true } },
-            templateVersion: { select: { version: true } },
-            connection: { select: { name: true } }
-          }
+          include: includeDeploymentRelations
         });
 
-        if (existing) {
-          return reply.status(200).send(serializeDeployment(existing));
+        if (!existing) {
+          throw error;
         }
+
+        return reply.status(200).send(serializeDeployment(existing));
       }
 
-      const deployment = await instance.prisma.deploymentJob.create({
-        data: {
-          userId,
-          templateId: body.templateId,
-          templateVersionId: templateVersion.id,
-          connectionId: body.connectionId,
-          name: body.name,
-          idempotencyKey,
-          target: body.target,
-          status: 'queued',
-          renderPayload: body.renderPayload as object | undefined,
-          logs: [{ at: new Date().toISOString(), message: `Deployment queued for template version ${templateVersion.version}` }]
-        },
-        include: {
-          template: { select: { name: true } },
-          templateVersion: { select: { version: true } },
-          connection: { select: { name: true } }
-        }
-      });
+      if (wasCreated) {
+        await instance.queues.deploymentQueue.add(
+          'render-template',
+          { deploymentId: deployment.id, queuedAt: new Date().toISOString() },
+          { attempts: 4, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: 100, removeOnFail: 500 }
+        );
 
-      await instance.queues.deploymentQueue.add(
-        'render-template',
-        { deploymentId: deployment.id, queuedAt: new Date().toISOString() },
-        { attempts: 4, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: 100, removeOnFail: 500 }
-      );
-
-      await instance.audit.log({
-        actorUserId: userId,
-        action: 'deployment.create',
-        entityType: 'deployment_job',
-        entityId: deployment.id,
-        metadata: {
-          templateId: body.templateId,
-          templateVersionId: templateVersion.id,
-          connectionId: body.connectionId,
-          target: body.target,
-          idempotencyKey
-        }
-      });
+        await instance.audit.log({
+          actorUserId: userId,
+          action: 'deployment.create',
+          entityType: 'deployment_job',
+          entityId: deployment.id,
+          metadata: {
+            templateId: body.templateId,
+            templateVersionId: templateVersion.id,
+            connectionId: body.connectionId,
+            target: body.target,
+            idempotencyKey
+          }
+        });
+      }
 
       return reply.status(201).send(serializeDeployment(deployment));
     });

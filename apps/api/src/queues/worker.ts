@@ -30,6 +30,19 @@ const appendLog = async (deploymentId: string, message: string) => {
   await prisma.deploymentJob.update({ where: { id: deploymentId }, data: { logs: next } });
 };
 
+const isDeploymentCanceled = async (deploymentId: string) => {
+  const row = await prisma.deploymentJob.findUnique({ where: { id: deploymentId }, select: { status: true } });
+  return row?.status === 'canceled';
+};
+
+const updateDeploymentIfNotCanceled = async (deploymentId: string, data: Record<string, unknown>) => {
+  const result = await prisma.deploymentJob.updateMany({
+    where: { id: deploymentId, status: { not: 'canceled' } },
+    data: data as never
+  });
+  return result.count > 0;
+};
+
 const worker = new Worker(
   'deployment-jobs',
   async (job) => {
@@ -51,7 +64,10 @@ const worker = new Worker(
     }
 
     if (job.name === 'render-template') {
-      await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { status: 'rendering' } });
+      const movedToRendering = await updateDeploymentIfNotCanceled(deployment.id, { status: 'rendering' });
+      if (!movedToRendering) {
+        return { skipped: true, reason: 'canceled' };
+      }
       await appendLog(deployment.id, 'Rendering template started');
 
       await mkdir(env.TEMPLATE_ARTIFACT_DIR, { recursive: true });
@@ -66,26 +82,42 @@ const worker = new Worker(
       };
       await writeFile(renderedPath, JSON.stringify(rendered, null, 2), 'utf8');
 
-      await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { renderedArtifactPath: renderedPath } });
+      const savedArtifact = await updateDeploymentIfNotCanceled(deployment.id, { renderedArtifactPath: renderedPath });
+      if (!savedArtifact) {
+        return { skipped: true, reason: 'canceled' };
+      }
       await appendLog(deployment.id, 'Rendering template complete');
+
+      if (await isDeploymentCanceled(deployment.id)) {
+        return { skipped: true, reason: 'canceled' };
+      }
+
       await deploymentJobsQueue.add('deploy-project', { deploymentId: deployment.id }, queueOptions.deploy);
       return { deploymentId: deployment.id, stage: 'rendered' };
     }
 
     if (job.name === 'deploy-project') {
-      await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { status: 'deploying' } });
+      const movedToDeploying = await updateDeploymentIfNotCanceled(deployment.id, { status: 'deploying' });
+      if (!movedToDeploying) {
+        return { skipped: true, reason: 'canceled' };
+      }
       await appendLog(deployment.id, 'Deploying rendered project (simulated)');
 
       const providerDeploymentId = `dep_${deployment.id.slice(0, 10)}`;
       const deploymentDomain = `${deployment.name.toLowerCase().replace(/[^a-z0-9-]/g, '-')}-${deployment.id.slice(0, 6)}.vercel.app`;
       const deploymentUrl = `https://${deploymentDomain}`;
 
-      await prisma.deploymentJob.update({
-        where: { id: deployment.id },
-        data: { providerDeploymentId, deploymentDomain, deploymentUrl }
-      });
+      const savedProviderDetails = await updateDeploymentIfNotCanceled(deployment.id, { providerDeploymentId, deploymentDomain, deploymentUrl });
+      if (!savedProviderDetails) {
+        return { skipped: true, reason: 'canceled' };
+      }
 
       await appendLog(deployment.id, `Deployment accepted by provider as ${providerDeploymentId}`);
+
+      if (await isDeploymentCanceled(deployment.id)) {
+        return { skipped: true, reason: 'canceled' };
+      }
+
       await deploymentJobsQueue.add('poll-deployment-status', { deploymentId: deployment.id, pollCount: 1 }, { ...queueOptions.poll, delay: 1500 });
 
       return { deploymentId: deployment.id, stage: 'deploying' };
@@ -93,6 +125,9 @@ const worker = new Worker(
 
     if (job.name === 'poll-deployment-status') {
       const pollCount = Number((job.data as { pollCount?: number }).pollCount ?? 1);
+      if (await isDeploymentCanceled(deployment.id)) {
+        return { skipped: true, reason: 'canceled' };
+      }
 
       if (pollCount < 2) {
         await appendLog(deployment.id, `Poll attempt ${pollCount}: deployment still building`);
@@ -100,7 +135,10 @@ const worker = new Worker(
         return { deploymentId: deployment.id, stage: 'polling', pollCount };
       }
 
-      await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { status: 'ready', errorMessage: null } });
+      const movedToReady = await updateDeploymentIfNotCanceled(deployment.id, { status: 'ready', errorMessage: null });
+      if (!movedToReady) {
+        return { skipped: true, reason: 'canceled' };
+      }
       await appendLog(deployment.id, 'Deployment reached READY status');
       await connectionJobsQueue.add(
         'sync-vercel-usage',
