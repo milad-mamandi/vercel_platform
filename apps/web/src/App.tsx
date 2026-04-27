@@ -21,6 +21,7 @@ type VercelConnection = {
   tokenStatus: string;
   tokenPreview: string;
   lastValidatedAt: string | null;
+  lastUsageSyncAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -33,6 +34,17 @@ const cardStyle: CSSProperties = {
 };
 
 const API_BASE = 'http://localhost:4000';
+
+const formatDate = (isoValue: string | null) => {
+  if (!isoValue) {
+    return 'Never';
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(new Date(isoValue));
+};
 
 const App = () => {
   const [session, setSession] = useState<Session | null>(null);
@@ -136,7 +148,7 @@ const App = () => {
     setTeamId('');
     setTeamSlug('');
     setPlan('');
-    setMessage('Connection added.');
+    setMessage('Connection added. Run validation to confirm token status.');
     await loadConnections();
   };
 
@@ -167,6 +179,46 @@ const App = () => {
     await loadConnections();
   };
 
+  const onValidateConnection = async (id: string) => {
+    if (!session) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE}/api/vercel/connections/${id}/validate`, {
+      method: 'POST',
+      headers: authHeaders
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMessage(data.message ?? 'Validation failed');
+      return;
+    }
+
+    setMessage('Connection validation complete.');
+    await loadConnections();
+  };
+
+  const onSyncUsage = async (id: string) => {
+    if (!session) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE}/api/vercel/connections/${id}/sync-usage`, {
+      method: 'POST',
+      headers: authHeaders
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMessage(data.message ?? 'Usage sync failed');
+      return;
+    }
+
+    setMessage(data.message ?? 'Usage sync queued.');
+    await loadConnections();
+  };
+
   const onDeleteConnection = async (id: string) => {
     if (!session) {
       return;
@@ -190,7 +242,7 @@ const App = () => {
   return (
     <main style={{ fontFamily: 'Inter, system-ui, sans-serif', margin: '0 auto', maxWidth: 1024, padding: '2rem' }}>
       <h1>Authorized Vercel Deployment Automation Platform</h1>
-      <p>Milestone 2 start: auth UI + Vercel connection manager wired to the Fastify API.</p>
+      <p>Current build: foundation + Vercel connection CRUD + token validation + manual usage-sync queue trigger.</p>
 
       {!session ? (
         <section style={{ ...cardStyle, marginTop: '1.25rem' }}>
@@ -241,6 +293,9 @@ const App = () => {
                 <p>
                   team: {connection.teamSlug ?? 'n/a'} | plan: {connection.plan ?? 'n/a'} | token: {connection.tokenPreview}
                 </p>
+                <p>
+                  validated: {formatDate(connection.lastValidatedAt)} | usage synced: {formatDate(connection.lastUsageSyncAt)}
+                </p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <input
                     value={newNameById[connection.id] ?? connection.name}
@@ -252,6 +307,8 @@ const App = () => {
                     }
                   />
                   <button onClick={() => onRenameConnection(connection.id)}>Rename</button>
+                  <button onClick={() => onValidateConnection(connection.id)}>Validate token</button>
+                  <button onClick={() => onSyncUsage(connection.id)}>Sync usage</button>
                   <button onClick={() => onDeleteConnection(connection.id)} style={{ color: '#b91c1c' }}>
                     Delete
                   </button>

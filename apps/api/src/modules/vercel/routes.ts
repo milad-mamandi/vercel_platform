@@ -54,7 +54,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
           teamSlug: body.teamSlug,
           plan: body.plan,
           encryptedToken: Buffer.from(body.token).toString('base64'),
-          tokenStatus: 'valid',
+          tokenStatus: 'unknown',
           lastValidatedAt: now
         },
         select: {
@@ -168,6 +168,101 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return redactConnection(updated);
+    });
+
+    instance.post('/api/vercel/connections/:id/validate', async (request, reply) => {
+      const userId = String(request.user.sub);
+      const { id } = paramsSchema.parse(request.params);
+
+      const existing = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
+      if (!existing) {
+        return reply.status(404).send({ message: 'Connection not found' });
+      }
+
+      const rawToken = Buffer.from(existing.encryptedToken, 'base64').toString('utf8');
+      const nextStatus: 'valid' | 'invalid' = rawToken.length >= 10 ? 'valid' : 'invalid';
+
+      const updated = await instance.prisma.vercelConnection.update({
+        where: { id },
+        data: { tokenStatus: nextStatus, lastValidatedAt: new Date() },
+        select: {
+          id: true,
+          name: true,
+          teamId: true,
+          teamSlug: true,
+          plan: true,
+          tokenStatus: true,
+          lastValidatedAt: true,
+          lastUsageSyncAt: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      });
+
+      await instance.audit.log({
+        actorUserId: userId,
+        action: 'vercel.connection.validate',
+        entityType: 'vercel_connection',
+        entityId: id,
+        metadata: { tokenStatus: nextStatus }
+      });
+
+      return redactConnection(updated);
+    });
+
+    instance.post('/api/vercel/connections/:id/sync-usage', async (request, reply) => {
+      const userId = String(request.user.sub);
+      const { id } = paramsSchema.parse(request.params);
+
+      const existing = await instance.prisma.vercelConnection.findFirst({ where: { id, userId } });
+      if (!existing) {
+        return reply.status(404).send({ message: 'Connection not found' });
+      }
+
+      const syncedAt = new Date();
+
+      const updated = await instance.prisma.vercelConnection.update({
+        where: { id },
+        data: { lastUsageSyncAt: syncedAt },
+        select: {
+          id: true,
+          name: true,
+          teamId: true,
+          teamSlug: true,
+          plan: true,
+          tokenStatus: true,
+          lastValidatedAt: true,
+          lastUsageSyncAt: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      });
+
+      await instance.queues.connectionQueue.add(
+        'sync-vercel-usage',
+        {
+          connectionId: id,
+          requestedByUserId: userId,
+          queuedAt: syncedAt.toISOString()
+        },
+        {
+          removeOnComplete: 100,
+          removeOnFail: 500
+        }
+      );
+
+      await instance.audit.log({
+        actorUserId: userId,
+        action: 'vercel.connection.sync_usage',
+        entityType: 'vercel_connection',
+        entityId: id,
+        metadata: { queuedAt: syncedAt.toISOString() }
+      });
+
+      return reply.status(202).send({
+        message: 'Usage sync queued',
+        connection: redactConnection(updated)
+      });
     });
 
     instance.delete('/api/vercel/connections/:id', async (request, reply) => {
