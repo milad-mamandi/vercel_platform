@@ -58,12 +58,16 @@ model VercelConnection {
   id              String   @id @default(cuid())
   userId          String
   name            String
+  vercelUserId    String?
+  vercelEmail     String?
+  vercelUsername  String?
   teamId          String?
   teamSlug        String?
   plan            String?
   encryptedToken  String
   tokenStatus     String   @default("valid")
   lastValidatedAt DateTime?
+  lastHealthCheckAt DateTime?
   lastUsageSyncAt DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
