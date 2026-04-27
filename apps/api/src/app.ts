@@ -9,6 +9,7 @@ import errorHandlerPlugin from './plugins/error-handler.js';
 import healthRoutes from './modules/health/routes.js';
 import authRoutes from './modules/auth/routes.js';
 import vercelRoutes from './modules/vercel/routes.js';
+import deploymentsRoutes from './modules/deployments/routes.js';
 
 export const buildApp = () => {
   const app = Fastify({ logger: true });
@@ -24,6 +25,7 @@ export const buildApp = () => {
   app.register(healthRoutes);
   app.register(authRoutes);
   app.register(vercelRoutes);
+  app.register(deploymentsRoutes);
 
   return app;
 };

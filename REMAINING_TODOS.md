@@ -26,11 +26,11 @@ This checklist reflects current implementation status in this repo as of 2026-04
 
 ## Milestone 3: First Deployment
 
-- [ ] Template DB models + API routes
-- [ ] Template artifact storage (folder/zip)
-- [ ] Deployment job model + CRUD/list endpoints
-- [ ] Worker implementation for `render-template`, `deploy-project`, `poll-deployment-status`
-- [ ] Deployment status/log persistence and UI history table
+- [x] Template DB models + API routes
+- [x] Template artifact storage (folder/zip)
+- [x] Deployment job model + CRUD/list endpoints
+- [x] Worker implementation for `render-template`, `deploy-project`, `poll-deployment-status`
+- [x] Deployment status/log persistence and UI history table
 
 ## Milestone 4: Usage Tracking
 

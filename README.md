@@ -8,6 +8,9 @@ This repository currently includes:
 - Redis + BullMQ queue wiring
 - Authentication + role checks + audit logging primitives
 - Vercel connection CRUD + real token validation + metadata hydration
+- Deployment templates + artifact persistence + deployment job queue API
+- Deployment worker pipeline for `render-template` -> `deploy-project` -> `poll-deployment-status`
+- Deployment history table in the React dashboard
 - AES-256-GCM token encryption at rest (`TOKEN_ENCRYPTION_KEY`)
 - Periodic connection health scan + revalidation background jobs
 
@@ -59,3 +62,8 @@ A detailed implementation checklist is tracked in [`REMAINING_TODOS.md`](./REMAI
 - `DELETE /api/vercel/connections/:id`
 - `POST /api/vercel/connections/:id/validate`
 - `POST /api/vercel/connections/:id/sync-usage`
+- `POST /api/templates`
+- `GET /api/templates`
+- `POST /api/deployments`
+- `GET /api/deployments`
+- `GET /api/deployments/:id`

@@ -17,6 +17,8 @@ model User {
   userRoles         UserRole[]
   auditEvents       AuditEvent[]       @relation("AuditActor")
   vercelConnections VercelConnection[]
+  templates         DeploymentTemplate[]
+  deployments       DeploymentJob[]
 }
 
 model Role {
@@ -55,24 +57,70 @@ model AuditEvent {
 }
 
 model VercelConnection {
-  id              String   @id @default(cuid())
-  userId          String
-  name            String
-  vercelUserId    String?
-  vercelEmail     String?
-  vercelUsername  String?
-  teamId          String?
-  teamSlug        String?
-  plan            String?
-  encryptedToken  String
-  tokenStatus     String   @default("valid")
-  lastValidatedAt DateTime?
+  id                String   @id @default(cuid())
+  userId            String
+  name              String
+  vercelUserId      String?
+  vercelEmail       String?
+  vercelUsername    String?
+  teamId            String?
+  teamSlug          String?
+  plan              String?
+  encryptedToken    String
+  tokenStatus       String   @default("valid")
+  lastValidatedAt   DateTime?
   lastHealthCheckAt DateTime?
-  lastUsageSyncAt DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  lastUsageSyncAt   DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments DeploymentJob[]
 
   @@index([userId])
+}
+
+model DeploymentTemplate {
+  id               String   @id @default(cuid())
+  userId           String
+  name             String
+  description      String?
+  sourceType       String
+  artifactPath     String
+  variablesSchema  Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deployments DeploymentJob[]
+
+  @@index([userId])
+}
+
+model DeploymentJob {
+  id                    String   @id @default(cuid())
+  userId                String
+  templateId            String
+  connectionId          String
+  name                  String
+  target                String   @default("preview")
+  status                String   @default("queued")
+  renderPayload         Json?
+  renderedArtifactPath  String?
+  deploymentUrl         String?
+  deploymentDomain      String?
+  providerDeploymentId  String?
+  logs                  Json?
+  errorMessage          String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template   DeploymentTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  connection VercelConnection   @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([templateId])
+  @@index([connectionId])
+  @@index([status])
 }
