@@ -11,7 +11,7 @@ This checklist reflects current implementation status in this repo as of 2026-04
 - [x] Auth and role assignment for new users
 - [x] Audit logging plugin and usage in auth + connection actions
 - [ ] Seed/default admin workflow and role management UI
-- [ ] Centralized error handling and request validation error format
+- [x] Centralized error handling and request validation error format
 
 ## Milestone 2: Vercel Connections
 
