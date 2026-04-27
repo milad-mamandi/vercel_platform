@@ -220,6 +220,18 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const syncedAt = new Date();
+      await instance.queues.connectionQueue.add(
+        'sync-vercel-usage',
+        {
+          connectionId: id,
+          requestedByUserId: userId,
+          queuedAt: syncedAt.toISOString()
+        },
+        {
+          removeOnComplete: 100,
+          removeOnFail: 500
+        }
+      );
 
       const updated = await instance.prisma.vercelConnection.update({
         where: { id },
@@ -237,19 +249,6 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
           updatedAt: true
         }
       });
-
-      await instance.queues.connectionQueue.add(
-        'sync-vercel-usage',
-        {
-          connectionId: id,
-          requestedByUserId: userId,
-          queuedAt: syncedAt.toISOString()
-        },
-        {
-          removeOnComplete: 100,
-          removeOnFail: 500
-        }
-      );
 
       await instance.audit.log({
         actorUserId: userId,
