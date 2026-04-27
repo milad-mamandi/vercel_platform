@@ -15,12 +15,16 @@ type Session = {
 type VercelConnection = {
   id: string;
   name: string;
+  vercelUserId: string | null;
+  vercelEmail: string | null;
+  vercelUsername: string | null;
   teamId: string | null;
   teamSlug: string | null;
   plan: string | null;
   tokenStatus: string;
   tokenPreview: string;
   lastValidatedAt: string | null;
+  lastHealthCheckAt: string | null;
   lastUsageSyncAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -294,7 +298,11 @@ const App = () => {
                   team: {connection.teamSlug ?? 'n/a'} | plan: {connection.plan ?? 'n/a'} | token: {connection.tokenPreview}
                 </p>
                 <p>
-                  validated: {formatDate(connection.lastValidatedAt)} | usage synced: {formatDate(connection.lastUsageSyncAt)}
+                  vercel user: {connection.vercelUsername ?? connection.vercelEmail ?? connection.vercelUserId ?? 'n/a'}
+                </p>
+                <p>
+                  validated: {formatDate(connection.lastValidatedAt)} | health checked: {formatDate(connection.lastHealthCheckAt)} | usage
+                  synced: {formatDate(connection.lastUsageSyncAt)}
                 </p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <input

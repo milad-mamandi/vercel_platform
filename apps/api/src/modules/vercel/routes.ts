@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { createEncryptedConnectionToken, revalidateConnection } from './service.js';
 
 const createConnectionSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -24,11 +25,15 @@ const paramsSchema = z.object({ id: z.string().cuid() });
 const redactConnection = (connection: {
   id: string;
   name: string;
+  vercelUserId: string | null;
+  vercelEmail: string | null;
+  vercelUsername: string | null;
   teamId: string | null;
   teamSlug: string | null;
   plan: string | null;
   tokenStatus: string;
   lastValidatedAt: Date | null;
+  lastHealthCheckAt: Date | null;
   lastUsageSyncAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -44,8 +49,6 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
     instance.post('/api/vercel/connections', async (request, reply) => {
       const body = createConnectionSchema.parse(request.body);
       const userId = String(request.user.sub);
-      const now = new Date();
-
       const connection = await instance.prisma.vercelConnection.create({
         data: {
           userId,
@@ -53,18 +56,21 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
           teamId: body.teamId,
           teamSlug: body.teamSlug,
           plan: body.plan,
-          encryptedToken: Buffer.from(body.token).toString('base64'),
-          tokenStatus: 'unknown',
-          lastValidatedAt: now
+          encryptedToken: createEncryptedConnectionToken(body.token),
+          tokenStatus: 'unknown'
         },
         select: {
           id: true,
           name: true,
+          vercelUserId: true,
+          vercelEmail: true,
+          vercelUsername: true,
           teamId: true,
           teamSlug: true,
           plan: true,
           tokenStatus: true,
           lastValidatedAt: true,
+          lastHealthCheckAt: true,
           lastUsageSyncAt: true,
           createdAt: true,
           updatedAt: true
@@ -91,11 +97,15 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         select: {
           id: true,
           name: true,
+          vercelUserId: true,
+          vercelEmail: true,
+          vercelUsername: true,
           teamId: true,
           teamSlug: true,
           plan: true,
           tokenStatus: true,
           lastValidatedAt: true,
+          lastHealthCheckAt: true,
           lastUsageSyncAt: true,
           createdAt: true,
           updatedAt: true
@@ -114,11 +124,15 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         select: {
           id: true,
           name: true,
+          vercelUserId: true,
+          vercelEmail: true,
+          vercelUsername: true,
           teamId: true,
           teamSlug: true,
           plan: true,
           tokenStatus: true,
           lastValidatedAt: true,
+          lastHealthCheckAt: true,
           lastUsageSyncAt: true,
           createdAt: true,
           updatedAt: true
@@ -148,11 +162,15 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         select: {
           id: true,
           name: true,
+          vercelUserId: true,
+          vercelEmail: true,
+          vercelUsername: true,
           teamId: true,
           teamSlug: true,
           plan: true,
           tokenStatus: true,
           lastValidatedAt: true,
+          lastHealthCheckAt: true,
           lastUsageSyncAt: true,
           createdAt: true,
           updatedAt: true
@@ -179,32 +197,17 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(404).send({ message: 'Connection not found' });
       }
 
-      const rawToken = Buffer.from(existing.encryptedToken, 'base64').toString('utf8');
-      const nextStatus: 'valid' | 'invalid' = rawToken.length >= 10 ? 'valid' : 'invalid';
-
-      const updated = await instance.prisma.vercelConnection.update({
-        where: { id },
-        data: { tokenStatus: nextStatus, lastValidatedAt: new Date() },
-        select: {
-          id: true,
-          name: true,
-          teamId: true,
-          teamSlug: true,
-          plan: true,
-          tokenStatus: true,
-          lastValidatedAt: true,
-          lastUsageSyncAt: true,
-          createdAt: true,
-          updatedAt: true
-        }
-      });
+      const updated = await revalidateConnection(instance.prisma, id);
+      if (!updated) {
+        return reply.status(404).send({ message: 'Connection not found' });
+      }
 
       await instance.audit.log({
         actorUserId: userId,
         action: 'vercel.connection.validate',
         entityType: 'vercel_connection',
         entityId: id,
-        metadata: { tokenStatus: nextStatus }
+        metadata: { tokenStatus: updated.tokenStatus, triggeredBy: 'manual' }
       });
 
       return redactConnection(updated);
@@ -227,11 +230,15 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         select: {
           id: true,
           name: true,
+          vercelUserId: true,
+          vercelEmail: true,
+          vercelUsername: true,
           teamId: true,
           teamSlug: true,
           plan: true,
           tokenStatus: true,
           lastValidatedAt: true,
+          lastHealthCheckAt: true,
           lastUsageSyncAt: true,
           createdAt: true,
           updatedAt: true

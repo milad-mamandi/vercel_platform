@@ -1,4 +1,4 @@
-# Vercel Platform (Foundation + Milestone 2 Progress)
+# Vercel Platform (Foundation + Milestone 2 Complete)
 
 This repository currently includes:
 
@@ -7,7 +7,9 @@ This repository currently includes:
 - Prisma schema for PostgreSQL
 - Redis + BullMQ queue wiring
 - Authentication + role checks + audit logging primitives
-- Vercel connection CRUD + token validation + manual usage-sync queue trigger
+- Vercel connection CRUD + real token validation + metadata hydration
+- AES-256-GCM token encryption at rest (`TOKEN_ENCRYPTION_KEY`)
+- Periodic connection health scan + revalidation background jobs
 
 A detailed implementation checklist is tracked in [`REMAINING_TODOS.md`](./REMAINING_TODOS.md).
 
@@ -30,6 +32,9 @@ A detailed implementation checklist is tracked in [`REMAINING_TODOS.md`](./REMAI
    ```bash
    cp apps/api/.env.example apps/api/.env
    ```
+   Required additional variables:
+   - `TOKEN_ENCRYPTION_KEY` (base64-encoded 32-byte key)
+   - optional: `CONNECTION_REVALIDATION_SCHEDULE_MS` and `CONNECTION_STALE_AFTER_MS`
 4. Generate Prisma client and migrate DB:
    ```bash
    npm run prisma:generate -w @platform/api

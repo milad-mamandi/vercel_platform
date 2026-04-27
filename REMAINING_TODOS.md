@@ -19,10 +19,10 @@ This checklist reflects current implementation status in this repo as of 2026-04
 - [x] Connection management UI in web app
 - [x] Token validation endpoint (`POST /api/vercel/connections/:id/validate`)
 - [x] Manual usage sync queue trigger (`POST /api/vercel/connections/:id/sync-usage`)
-- [ ] Real Vercel API/CLI token validation (currently local placeholder logic)
-- [ ] Team/account metadata fetch from Vercel
-- [ ] Strong encryption at rest using `TOKEN_ENCRYPTION_KEY` (currently base64 placeholder)
-- [ ] Connection health checks and periodic revalidation job
+- [x] Real Vercel API/CLI token validation (currently local placeholder logic)
+- [x] Team/account metadata fetch from Vercel
+- [x] Strong encryption at rest using `TOKEN_ENCRYPTION_KEY` (currently base64 placeholder)
+- [x] Connection health checks and periodic revalidation job
 
 ## Milestone 3: First Deployment
 
