@@ -9,7 +9,8 @@ const schema = z.object({
   TOKEN_ENCRYPTION_KEY: z.string().min(1),
   CONNECTION_REVALIDATION_SCHEDULE_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
   CONNECTION_STALE_AFTER_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
-  TEMPLATE_ARTIFACT_DIR: z.string().default('./tmp/template-artifacts')
+  TEMPLATE_ARTIFACT_DIR: z.string().default('./tmp/template-artifacts'),
+  ADMIN_SEED_KEY: z.string().min(12).optional()
 });
 
 export const env = schema.parse(process.env);

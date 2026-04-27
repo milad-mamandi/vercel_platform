@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { createEncryptedConnectionToken, revalidateConnection } from './service.js';
+import { requireRole } from '../auth/requireRole.js';
 
 const createConnectionSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -231,10 +232,7 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
           requestedByUserId: userId,
           queuedAt: queuedAt.toISOString()
         },
-        {
-          removeOnComplete: 100,
-          removeOnFail: 500
-        }
+        { attempts: 3, backoff: { type: 'exponential', delay: 1500 }, removeOnComplete: 100, removeOnFail: 500 }
       );
 
       await instance.audit.log({
@@ -266,22 +264,30 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
         orderBy: { createdAt: 'desc' },
         include: { services: true }
       });
+      const quotaRules = await instance.prisma.quotaRule.findMany();
+      const quotaRuleMap = Object.fromEntries(quotaRules.map((rule) => [rule.serviceName, rule]));
 
       if (!latestSnapshot) {
         return { connectionId: id, hasData: false, services: [] };
       }
 
-      const services = latestSnapshot.services.map((service) => ({
-        serviceName: service.serviceName,
-        quantity: service.quantity,
-        unit: service.unit,
-        includedLimit: service.includedLimit,
-        estimatedRemaining: service.estimatedRemaining,
-        percentUsed:
-          typeof service.includedLimit === 'number' && service.includedLimit > 0
-            ? Math.min((service.quantity / service.includedLimit) * 100, 100)
-            : null
-      }));
+      const services = latestSnapshot.services.map((service) => {
+        const rule = quotaRuleMap[service.serviceName];
+        const includedLimit = service.includedLimit ?? rule?.defaultLimit ?? null;
+        return {
+          serviceName: service.serviceName,
+          quantity: service.quantity,
+          unit: service.unit,
+          includedLimit,
+          estimatedRemaining:
+            service.estimatedRemaining ??
+            (typeof includedLimit === 'number' ? Math.max(includedLimit - service.quantity, 0) : null),
+          percentUsed:
+            typeof includedLimit === 'number' && includedLimit > 0
+              ? Math.min((service.quantity / includedLimit) * 100, 100)
+              : null
+        };
+      });
 
       return {
         connectionId: id,
@@ -368,6 +374,39 @@ const vercelRoutes: FastifyPluginAsync = async (app) => {
 
       return reply.status(204).send();
     });
+  });
+
+  app.get('/api/admin/quota-rules', { preHandler: [requireRole(['admin'])] }, async () => {
+    return app.prisma.quotaRule.findMany({ orderBy: { serviceName: 'asc' } });
+  });
+
+  app.put('/api/admin/quota-rules/:serviceName', { preHandler: [requireRole(['admin'])] }, async (request) => {
+    const actorUserId = String((request.user as { sub: string }).sub);
+    const { serviceName } = z.object({ serviceName: z.string().trim().min(1) }).parse(request.params);
+    const body = z
+      .object({
+        defaultLimit: z.number().positive(),
+        unit: z.string().trim().min(1),
+        warningAtPct: z.number().min(1).max(100).default(80),
+        criticalAtPct: z.number().min(1).max(100).default(95)
+      })
+      .parse(request.body);
+
+    const rule = await app.prisma.quotaRule.upsert({
+      where: { serviceName },
+      update: body,
+      create: { serviceName, ...body }
+    });
+
+    await app.audit.log({
+      actorUserId,
+      action: 'admin.quota_rule.upsert',
+      entityType: 'quota_rule',
+      entityId: rule.id,
+      metadata: { serviceName: rule.serviceName }
+    });
+
+    return rule;
   });
 };
 

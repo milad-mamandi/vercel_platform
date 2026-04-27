@@ -301,6 +301,7 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
     instance.post('/api/deployments', async (request, reply) => {
       const userId = String((request.user as { sub: string }).sub);
       const body = deploymentSchema.parse(request.body);
+      const idempotencyKey = z.string().trim().min(8).max(120).optional().parse(request.headers['idempotency-key']);
 
       const [template, connection] = await Promise.all([
         instance.prisma.deploymentTemplate.findFirst({ where: { id: body.templateId, userId } }),
@@ -329,6 +330,21 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({ message: (error as Error).message });
       }
 
+      if (idempotencyKey) {
+        const existing = await instance.prisma.deploymentJob.findFirst({
+          where: { userId, idempotencyKey },
+          include: {
+            template: { select: { name: true } },
+            templateVersion: { select: { version: true } },
+            connection: { select: { name: true } }
+          }
+        });
+
+        if (existing) {
+          return reply.status(200).send(serializeDeployment(existing));
+        }
+      }
+
       const deployment = await instance.prisma.deploymentJob.create({
         data: {
           userId,
@@ -336,6 +352,7 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
           templateVersionId: templateVersion.id,
           connectionId: body.connectionId,
           name: body.name,
+          idempotencyKey,
           target: body.target,
           status: 'queued',
           renderPayload: body.renderPayload as object | undefined,
@@ -351,7 +368,7 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
       await instance.queues.deploymentQueue.add(
         'render-template',
         { deploymentId: deployment.id, queuedAt: new Date().toISOString() },
-        { removeOnComplete: 100, removeOnFail: 500 }
+        { attempts: 4, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: 100, removeOnFail: 500 }
       );
 
       await instance.audit.log({
@@ -363,7 +380,8 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
           templateId: body.templateId,
           templateVersionId: templateVersion.id,
           connectionId: body.connectionId,
-          target: body.target
+          target: body.target,
+          idempotencyKey
         }
       });
 
@@ -401,10 +419,56 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
       await instance.queues.deploymentQueue.add(
         'render-template',
         { deploymentId: retried.id, queuedAt: new Date().toISOString(), retriedFrom: original.id },
-        { removeOnComplete: 100, removeOnFail: 500 }
+        { attempts: 4, backoff: { type: 'exponential', delay: 1000 }, removeOnComplete: 100, removeOnFail: 500 }
       );
 
+      await instance.audit.log({
+        actorUserId: userId,
+        action: 'deployment.retry',
+        entityType: 'deployment_job',
+        entityId: retried.id,
+        metadata: { retriedFrom: original.id }
+      });
+
       return reply.status(201).send(serializeDeployment(retried));
+    });
+
+    instance.post('/api/deployments/:id/cancel', async (request, reply) => {
+      const userId = String((request.user as { sub: string }).sub);
+      const { id } = paramsSchema.parse(request.params);
+
+      const deployment = await instance.prisma.deploymentJob.findFirst({ where: { id, userId } });
+      if (!deployment) {
+        return reply.status(404).send({ message: 'Deployment not found' });
+      }
+
+      if (!['queued', 'rendering', 'deploying'].includes(deployment.status)) {
+        return reply.status(409).send({ message: `Cannot cancel deployment in status ${deployment.status}` });
+      }
+
+      const logs = Array.isArray(deployment.logs) ? deployment.logs : [];
+      const updated = await instance.prisma.deploymentJob.update({
+        where: { id },
+        data: {
+          status: 'canceled',
+          canceledAt: new Date(),
+          logs: [...logs, { at: new Date().toISOString(), message: 'Deployment canceled by user' }]
+        },
+        include: {
+          template: { select: { name: true } },
+          templateVersion: { select: { version: true } },
+          connection: { select: { name: true } }
+        }
+      });
+
+      await instance.audit.log({
+        actorUserId: userId,
+        action: 'deployment.cancel',
+        entityType: 'deployment_job',
+        entityId: id
+      });
+
+      return serializeDeployment(updated);
     });
 
     instance.get('/api/deployments', async (request) => {
@@ -440,6 +504,19 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return serializeDeployment(row);
+    });
+
+    instance.get('/api/deployments-strategy/evaluation', async () => {
+      return {
+        currentMode: 'cli-simulated',
+        evaluatedAt: new Date().toISOString(),
+        recommendation: 'hybrid',
+        notes: [
+          'Current queue uses CLI-compatible render/deploy/poll lifecycle.',
+          'A direct REST deploy adapter can reuse rendered artifacts and status polling contracts.',
+          'Roll out REST path behind a feature flag and compare failure rates by job metadata.'
+        ]
+      };
     });
   });
 };

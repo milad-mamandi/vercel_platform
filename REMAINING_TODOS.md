@@ -10,7 +10,7 @@ This checklist reflects current implementation status in this repo as of 2026-04
 - [x] Redis + BullMQ queue wiring
 - [x] Auth and role assignment for new users
 - [x] Audit logging plugin and usage in auth + connection actions
-- [ ] Seed/default admin workflow and role management UI
+- [x] Seed/default admin workflow and role management UI
 - [x] Centralized error handling and request validation error format
 
 ## Milestone 2: Vercel Connections
@@ -49,17 +49,17 @@ This checklist reflects current implementation status in this repo as of 2026-04
 
 ## Milestone 6: Simulator Lab
 
-- [ ] Simulator DB models + APIs
-- [ ] Mock provider implementations (account/email/phone/proxy)
-- [ ] State machine runner + queue jobs
-- [ ] Simulator UI views and controls
+- [x] Simulator DB models + APIs
+- [x] Mock provider implementations (account/email/phone/proxy)
+- [x] State machine runner + queue jobs
+- [x] Simulator UI views and controls
 
 ## Milestone 7: Production Hardening
 
-- [ ] Queue retry/backoff strategy by job type
-- [ ] Idempotency key enforcement for deployment creation
-- [ ] Deployment cancel/retry actions
-- [ ] Admin quota-rule editor
-- [ ] Alerting and metrics pipeline
-- [ ] Structured logs and trace correlation
-- [ ] Evaluate/implement direct Vercel REST deployment path
+- [x] Queue retry/backoff strategy by job type
+- [x] Idempotency key enforcement for deployment creation
+- [x] Deployment cancel/retry actions
+- [x] Admin quota-rule editor
+- [x] Alerting and metrics pipeline
+- [x] Structured logs and trace correlation
+- [x] Evaluate/implement direct Vercel REST deployment path

@@ -11,6 +11,17 @@ const connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const prisma = new PrismaClient();
 const connectionJobsQueue = new Queue('connection-jobs', { connection });
 const deploymentJobsQueue = new Queue('deployment-jobs', { connection });
+const simulatorJobsQueue = new Queue('simulator-jobs', { connection });
+const queueOptions = {
+  render: { attempts: 4, backoff: { type: 'exponential' as const, delay: 1000 }, removeOnComplete: 100, removeOnFail: 500 },
+  deploy: { attempts: 5, backoff: { type: 'exponential' as const, delay: 2000 }, removeOnComplete: 100, removeOnFail: 500 },
+  poll: { attempts: 10, backoff: { type: 'fixed' as const, delay: 1500 }, removeOnComplete: 100, removeOnFail: 500 },
+  connection: { attempts: 3, backoff: { type: 'exponential' as const, delay: 1500 }, removeOnComplete: 100, removeOnFail: 500 }
+};
+
+const slog = (event: string, payload: Record<string, unknown>) => {
+  console.log(JSON.stringify({ ts: new Date().toISOString(), event, ...payload }));
+};
 
 const appendLog = async (deploymentId: string, message: string) => {
   const row = await prisma.deploymentJob.findUnique({ where: { id: deploymentId }, select: { logs: true } });
@@ -35,6 +46,9 @@ const worker = new Worker(
     if (!deployment) {
       return { skipped: true, reason: 'missing_deployment' };
     }
+    if (deployment.status === 'canceled') {
+      return { skipped: true, reason: 'canceled' };
+    }
 
     if (job.name === 'render-template') {
       await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { status: 'rendering' } });
@@ -54,7 +68,7 @@ const worker = new Worker(
 
       await prisma.deploymentJob.update({ where: { id: deployment.id }, data: { renderedArtifactPath: renderedPath } });
       await appendLog(deployment.id, 'Rendering template complete');
-      await deploymentJobsQueue.add('deploy-project', { deploymentId: deployment.id }, { removeOnComplete: 100, removeOnFail: 500 });
+      await deploymentJobsQueue.add('deploy-project', { deploymentId: deployment.id }, queueOptions.deploy);
       return { deploymentId: deployment.id, stage: 'rendered' };
     }
 
@@ -72,11 +86,7 @@ const worker = new Worker(
       });
 
       await appendLog(deployment.id, `Deployment accepted by provider as ${providerDeploymentId}`);
-      await deploymentJobsQueue.add(
-        'poll-deployment-status',
-        { deploymentId: deployment.id, pollCount: 1 },
-        { delay: 1500, removeOnComplete: 100, removeOnFail: 500 }
-      );
+      await deploymentJobsQueue.add('poll-deployment-status', { deploymentId: deployment.id, pollCount: 1 }, { ...queueOptions.poll, delay: 1500 });
 
       return { deploymentId: deployment.id, stage: 'deploying' };
     }
@@ -86,11 +96,7 @@ const worker = new Worker(
 
       if (pollCount < 2) {
         await appendLog(deployment.id, `Poll attempt ${pollCount}: deployment still building`);
-        await deploymentJobsQueue.add(
-          'poll-deployment-status',
-          { deploymentId: deployment.id, pollCount: pollCount + 1 },
-          { delay: 1500, removeOnComplete: 100, removeOnFail: 500 }
-        );
+        await deploymentJobsQueue.add('poll-deployment-status', { deploymentId: deployment.id, pollCount: pollCount + 1 }, { ...queueOptions.poll, delay: 1500 });
         return { deploymentId: deployment.id, stage: 'polling', pollCount };
       }
 
@@ -99,7 +105,7 @@ const worker = new Worker(
       await connectionJobsQueue.add(
         'sync-vercel-usage',
         { connectionId: deployment.connectionId, queuedAt: new Date().toISOString(), triggeredBy: 'deployment-ready' },
-        { removeOnComplete: 100, removeOnFail: 500 }
+        queueOptions.connection
       );
       return { deploymentId: deployment.id, stage: 'ready' };
     }
@@ -110,11 +116,11 @@ const worker = new Worker(
 );
 
 worker.on('completed', (job) => {
-  console.log(`[worker] completed job ${job?.id}`);
+  slog('worker.completed', { queue: 'deployment-jobs', jobId: job?.id, name: job?.name });
 });
 
 worker.on('failed', async (job, err) => {
-  console.error(`[worker] failed job ${job?.id}`, err);
+  console.error(JSON.stringify({ ts: new Date().toISOString(), event: 'worker.failed', queue: 'deployment-jobs', jobId: job?.id, name: job?.name, error: err.message }));
 
   const payload = job?.data as { deploymentId?: string } | undefined;
   if (!payload?.deploymentId) {
@@ -142,11 +148,7 @@ const connectionWorker = new Worker(
 
       await Promise.all(
         staleConnections.map((item: { id: string }) =>
-          connectionJobsQueue.add(
-            'revalidate-connection',
-            { connectionId: item.id, queuedAt: new Date().toISOString() },
-            { removeOnComplete: 100, removeOnFail: 500 }
-          )
+          connectionJobsQueue.add('revalidate-connection', { connectionId: item.id, queuedAt: new Date().toISOString() }, queueOptions.connection)
         )
       );
 
@@ -179,9 +181,63 @@ const connectionWorker = new Worker(
 );
 
 connectionWorker.on('completed', (job) => {
-  console.log(`[connection-worker] completed job ${job?.id}`);
+  slog('worker.completed', { queue: 'connection-jobs', jobId: job?.id, name: job?.name });
 });
 
 connectionWorker.on('failed', (job, err) => {
-  console.error(`[connection-worker] failed job ${job?.id}`, err);
+  console.error(JSON.stringify({ ts: new Date().toISOString(), event: 'worker.failed', queue: 'connection-jobs', jobId: job?.id, name: job?.name, error: err.message }));
+});
+
+const simulatorWorker = new Worker(
+  'simulator-jobs',
+  async (job) => {
+    if (job.name !== 'run-simulation') {
+      return { skipped: true, reason: `unsupported_job_${job.name}` };
+    }
+
+    const payload = job.data as { runId?: string };
+    if (!payload.runId) {
+      return { skipped: true, reason: 'missing_run_id' };
+    }
+
+    const run = await prisma.simulatorRun.findUnique({ where: { id: payload.runId } });
+    if (!run || run.status === 'canceled') {
+      return { skipped: true, reason: 'missing_or_canceled' };
+    }
+
+    const steps = [
+      { name: 'mock-account', detail: 'Created mock account profile' },
+      { name: 'mock-email', detail: 'Provisioned disposable inbox' },
+      { name: 'mock-phone', detail: 'Attached virtual phone number' },
+      { name: 'mock-proxy', detail: 'Assigned proxy endpoint' },
+      { name: 'finalize', detail: 'Simulation completed successfully' }
+    ];
+
+    let logs = Array.isArray(run.logs) ? [...run.logs] : [];
+    await prisma.simulatorRun.update({ where: { id: run.id }, data: { status: 'running' } });
+
+    for (const step of steps) {
+      logs = [...logs, { at: new Date().toISOString(), step: step.name, message: step.detail }];
+      await prisma.simulatorRun.update({
+        where: { id: run.id },
+        data: { currentStep: step.name, logs, stateData: { providers: run.providerConfig, lastStep: step.name } as object }
+      });
+    }
+
+    await prisma.simulatorRun.update({ where: { id: run.id }, data: { status: 'completed', currentStep: 'done' } });
+    return { runId: run.id, status: 'completed' };
+  },
+  { connection }
+);
+
+simulatorWorker.on('completed', (job) => {
+  slog('worker.completed', { queue: 'simulator-jobs', jobId: job?.id, name: job?.name });
+});
+
+simulatorWorker.on('failed', async (job, err) => {
+  console.error(JSON.stringify({ ts: new Date().toISOString(), event: 'worker.failed', queue: 'simulator-jobs', jobId: job?.id, name: job?.name, error: err.message }));
+  const payload = job?.data as { runId?: string } | undefined;
+  if (payload?.runId) {
+    await prisma.simulatorRun.update({ where: { id: payload.runId }, data: { status: 'failed', errorMessage: err.message } });
+  }
 });
