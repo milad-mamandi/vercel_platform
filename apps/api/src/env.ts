@@ -8,7 +8,8 @@ const schema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
   TOKEN_ENCRYPTION_KEY: z.string().min(1),
   CONNECTION_REVALIDATION_SCHEDULE_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
-  CONNECTION_STALE_AFTER_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000)
+  CONNECTION_STALE_AFTER_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+  TEMPLATE_ARTIFACT_DIR: z.string().default('./tmp/template-artifacts')
 });
 
 export const env = schema.parse(process.env);

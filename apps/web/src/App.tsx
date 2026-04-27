@@ -30,6 +30,33 @@ type VercelConnection = {
   updatedAt: string;
 };
 
+type DeploymentTemplate = {
+  id: string;
+  name: string;
+  description: string | null;
+  sourceType: string;
+  artifactPath: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type DeploymentJob = {
+  id: string;
+  templateId: string;
+  connectionId: string;
+  name: string;
+  target: string;
+  status: string;
+  deploymentUrl: string | null;
+  deploymentDomain: string | null;
+  errorMessage: string | null;
+  logs: Array<{ at: string; message: string }> | null;
+  template?: { name: string };
+  connection?: { name: string };
+  createdAt: string;
+  updatedAt: string;
+};
+
 const cardStyle: CSSProperties = {
   border: '1px solid #e5e7eb',
   borderRadius: 12,
@@ -64,6 +91,20 @@ const App = () => {
   const [teamSlug, setTeamSlug] = useState('');
   const [plan, setPlan] = useState('');
   const [newNameById, setNewNameById] = useState<Record<string, string>>({});
+
+  const [templates, setTemplates] = useState<DeploymentTemplate[]>([]);
+  const [templateName, setTemplateName] = useState('');
+  const [templateDescription, setTemplateDescription] = useState('');
+  const [templateSourceType, setTemplateSourceType] = useState<'folder' | 'zip' | 'repo' | 'generated'>('generated');
+  const [templateArtifactContent, setTemplateArtifactContent] = useState('{"index":"hello"}');
+
+  const [deployments, setDeployments] = useState<DeploymentJob[]>([]);
+  const [deploymentName, setDeploymentName] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [selectedConnectionId, setSelectedConnectionId] = useState('');
+  const [deploymentTarget, setDeploymentTarget] = useState<'preview' | 'production'>('preview');
+  const [deploymentPayload, setDeploymentPayload] = useState('{"siteTitle":"Campaign A"}');
+
   const [message, setMessage] = useState('');
 
   const authHeaders = useMemo(
@@ -76,10 +117,7 @@ const App = () => {
       return;
     }
 
-    const response = await fetch(`${API_BASE}/api/vercel/connections`, {
-      headers: authHeaders
-    });
-
+    const response = await fetch(`${API_BASE}/api/vercel/connections`, { headers: authHeaders });
     if (!response.ok) {
       const error = await response.json().catch(() => ({ message: 'Failed to load connections' }));
       throw new Error(error.message ?? 'Failed to load connections');
@@ -87,12 +125,44 @@ const App = () => {
 
     const data = (await response.json()) as VercelConnection[];
     setConnections(data);
+    setSelectedConnectionId((previous) => previous || data[0]?.id || '');
     setNewNameById(Object.fromEntries(data.map((item) => [item.id, item.name])));
   }, [authHeaders, session]);
 
+  const loadTemplates = useCallback(async () => {
+    if (!session) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE}/api/templates`, { headers: authHeaders });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Failed to load templates' }));
+      throw new Error(error.message ?? 'Failed to load templates');
+    }
+
+    const data = (await response.json()) as DeploymentTemplate[];
+    setTemplates(data);
+    setSelectedTemplateId((previous) => previous || data[0]?.id || '');
+  }, [authHeaders, session]);
+
+  const loadDeployments = useCallback(async () => {
+    if (!session) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE}/api/deployments`, { headers: authHeaders });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Failed to load deployments' }));
+      throw new Error(error.message ?? 'Failed to load deployments');
+    }
+
+    const data = (await response.json()) as DeploymentJob[];
+    setDeployments(data);
+  }, [authHeaders, session]);
+
   useEffect(() => {
-    loadConnections().catch((error) => setMessage(error.message));
-  }, [loadConnections]);
+    Promise.all([loadConnections(), loadTemplates(), loadDeployments()]).catch((error) => setMessage(error.message));
+  }, [loadConnections, loadTemplates, loadDeployments]);
 
   const onAuthSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -111,7 +181,7 @@ const App = () => {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      setAuthError(data.message ?? 'Authentication failed');
+      setAuthError((data as { message?: string }).message ?? 'Authentication failed');
       return;
     }
 
@@ -143,7 +213,7 @@ const App = () => {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(data.message ?? 'Failed to create connection');
+      setMessage((data as { message?: string }).message ?? 'Failed to create connection');
       return;
     }
 
@@ -154,6 +224,76 @@ const App = () => {
     setPlan('');
     setMessage('Connection added. Run validation to confirm token status.');
     await loadConnections();
+  };
+
+  const onCreateTemplate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!session) {
+      return;
+    }
+
+    const response = await fetch(`${API_BASE}/api/templates`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        name: templateName,
+        description: templateDescription || undefined,
+        sourceType: templateSourceType,
+        artifactContent: templateArtifactContent
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMessage((data as { message?: string }).message ?? 'Failed to create template');
+      return;
+    }
+
+    setTemplateName('');
+    setTemplateDescription('');
+    setTemplateArtifactContent('{"index":"hello"}');
+    setMessage('Template created.');
+    await loadTemplates();
+  };
+
+  const onCreateDeployment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!session || !selectedTemplateId || !selectedConnectionId) {
+      setMessage('Select a template and connection first.');
+      return;
+    }
+
+    let parsedPayload: Record<string, unknown> | undefined;
+    if (deploymentPayload.trim()) {
+      try {
+        parsedPayload = JSON.parse(deploymentPayload) as Record<string, unknown>;
+      } catch {
+        setMessage('Deployment payload must be valid JSON.');
+        return;
+      }
+    }
+
+    const response = await fetch(`${API_BASE}/api/deployments`, {
+      method: 'POST',
+      headers: authHeaders,
+      body: JSON.stringify({
+        templateId: selectedTemplateId,
+        connectionId: selectedConnectionId,
+        name: deploymentName,
+        target: deploymentTarget,
+        renderPayload: parsedPayload
+      })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMessage((data as { message?: string }).message ?? 'Failed to queue deployment');
+      return;
+    }
+
+    setDeploymentName('');
+    setMessage('Deployment queued. Refreshing history...');
+    await loadDeployments();
   };
 
   const onRenameConnection = async (id: string) => {
@@ -175,7 +315,7 @@ const App = () => {
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      setMessage(data.message ?? 'Failed to rename connection');
+      setMessage((data as { message?: string }).message ?? 'Failed to rename connection');
       return;
     }
 
@@ -195,7 +335,7 @@ const App = () => {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(data.message ?? 'Validation failed');
+      setMessage((data as { message?: string }).message ?? 'Validation failed');
       return;
     }
 
@@ -215,11 +355,11 @@ const App = () => {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMessage(data.message ?? 'Usage sync failed');
+      setMessage((data as { message?: string }).message ?? 'Usage sync failed');
       return;
     }
 
-    setMessage(data.message ?? 'Usage sync queued.');
+    setMessage((data as { message?: string }).message ?? 'Usage sync queued.');
     await loadConnections();
   };
 
@@ -235,7 +375,7 @@ const App = () => {
 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      setMessage(data.message ?? 'Failed to delete connection');
+      setMessage((data as { message?: string }).message ?? 'Failed to delete connection');
       return;
     }
 
@@ -244,9 +384,9 @@ const App = () => {
   };
 
   return (
-    <main style={{ fontFamily: 'Inter, system-ui, sans-serif', margin: '0 auto', maxWidth: 1024, padding: '2rem' }}>
+    <main style={{ fontFamily: 'Inter, system-ui, sans-serif', margin: '0 auto', maxWidth: 1100, padding: '2rem' }}>
       <h1>Authorized Vercel Deployment Automation Platform</h1>
-      <p>Current build: foundation + Vercel connection CRUD + token validation + manual usage-sync queue trigger.</p>
+      <p>Current build: milestone 3 baseline with templates, deployment queue orchestration, and deployment history.</p>
 
       {!session ? (
         <section style={{ ...cardStyle, marginTop: '1.25rem' }}>
@@ -286,6 +426,58 @@ const App = () => {
             </form>
           </section>
 
+          <section style={{ ...cardStyle, marginTop: '1rem' }}>
+            <h2>Create template</h2>
+            <form onSubmit={onCreateTemplate} style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+              <input placeholder="Template name" value={templateName} onChange={(event) => setTemplateName(event.target.value)} required />
+              <input placeholder="Description (optional)" value={templateDescription} onChange={(event) => setTemplateDescription(event.target.value)} />
+              <select value={templateSourceType} onChange={(event) => setTemplateSourceType(event.target.value as 'folder' | 'zip' | 'repo' | 'generated')}>
+                <option value="generated">Generated</option>
+                <option value="folder">Folder</option>
+                <option value="zip">ZIP</option>
+                <option value="repo">Repository</option>
+              </select>
+              <input
+                placeholder="Artifact JSON/text"
+                value={templateArtifactContent}
+                onChange={(event) => setTemplateArtifactContent(event.target.value)}
+              />
+              <button type="submit">Create template</button>
+            </form>
+          </section>
+
+          <section style={{ ...cardStyle, marginTop: '1rem' }}>
+            <h2>Queue deployment</h2>
+            <form onSubmit={onCreateDeployment} style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+              <input placeholder="Deployment name" value={deploymentName} onChange={(event) => setDeploymentName(event.target.value)} required />
+              <select value={selectedTemplateId} onChange={(event) => setSelectedTemplateId(event.target.value)} required>
+                <option value="">Select template</option>
+                {templates.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <select value={selectedConnectionId} onChange={(event) => setSelectedConnectionId(event.target.value)} required>
+                <option value="">Select connection</option>
+                {connections.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              <select value={deploymentTarget} onChange={(event) => setDeploymentTarget(event.target.value as 'preview' | 'production')}>
+                <option value="preview">Preview</option>
+                <option value="production">Production</option>
+              </select>
+              <input value={deploymentPayload} onChange={(event) => setDeploymentPayload(event.target.value)} placeholder="Render payload JSON" />
+              <button type="submit">Queue deployment</button>
+              <button type="button" onClick={() => void loadDeployments()}>
+                Refresh history
+              </button>
+            </form>
+          </section>
+
           <section style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
             <h2>Your Vercel connections</h2>
             {connections.length === 0 ? <p>No connections yet.</p> : null}
@@ -297,12 +489,10 @@ const App = () => {
                 <p>
                   team: {connection.teamSlug ?? 'n/a'} | plan: {connection.plan ?? 'n/a'} | token: {connection.tokenPreview}
                 </p>
+                <p>vercel user: {connection.vercelUsername ?? connection.vercelEmail ?? connection.vercelUserId ?? 'n/a'}</p>
                 <p>
-                  vercel user: {connection.vercelUsername ?? connection.vercelEmail ?? connection.vercelUserId ?? 'n/a'}
-                </p>
-                <p>
-                  validated: {formatDate(connection.lastValidatedAt)} | health checked: {formatDate(connection.lastHealthCheckAt)} | usage
-                  synced: {formatDate(connection.lastUsageSyncAt)}
+                  validated: {formatDate(connection.lastValidatedAt)} | health checked: {formatDate(connection.lastHealthCheckAt)} | usage synced:{' '}
+                  {formatDate(connection.lastUsageSyncAt)}
                 </p>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <input
@@ -314,15 +504,64 @@ const App = () => {
                       }))
                     }
                   />
-                  <button onClick={() => onRenameConnection(connection.id)}>Rename</button>
-                  <button onClick={() => onValidateConnection(connection.id)}>Validate token</button>
-                  <button onClick={() => onSyncUsage(connection.id)}>Sync usage</button>
-                  <button onClick={() => onDeleteConnection(connection.id)} style={{ color: '#b91c1c' }}>
+                  <button onClick={() => void onRenameConnection(connection.id)}>Rename</button>
+                  <button onClick={() => void onValidateConnection(connection.id)}>Validate token</button>
+                  <button onClick={() => void onSyncUsage(connection.id)}>Sync usage</button>
+                  <button onClick={() => void onDeleteConnection(connection.id)} style={{ color: '#b91c1c' }}>
                     Delete
                   </button>
                 </div>
               </article>
             ))}
+          </section>
+
+          <section style={{ ...cardStyle, marginTop: '1rem' }}>
+            <h2>Templates</h2>
+            {templates.length === 0 ? <p>No templates yet.</p> : null}
+            <ul>
+              {templates.map((template) => (
+                <li key={template.id}>
+                  <strong>{template.name}</strong> ({template.sourceType}) · created {formatDate(template.createdAt)}
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section style={{ ...cardStyle, marginTop: '1rem' }}>
+            <h2>Deployment history</h2>
+            {deployments.length === 0 ? <p>No deployments yet.</p> : null}
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th align="left">Name</th>
+                  <th align="left">Template</th>
+                  <th align="left">Connection</th>
+                  <th align="left">Status</th>
+                  <th align="left">URL</th>
+                  <th align="left">Updated</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deployments.map((deployment) => (
+                  <tr key={deployment.id}>
+                    <td>{deployment.name}</td>
+                    <td>{deployment.template?.name ?? deployment.templateId}</td>
+                    <td>{deployment.connection?.name ?? deployment.connectionId}</td>
+                    <td>{deployment.status}</td>
+                    <td>
+                      {deployment.deploymentUrl ? (
+                        <a href={deployment.deploymentUrl} target="_blank" rel="noreferrer">
+                          {deployment.deploymentDomain}
+                        </a>
+                      ) : (
+                        'n/a'
+                      )}
+                    </td>
+                    <td>{formatDate(deployment.updatedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </section>
         </>
       )}
