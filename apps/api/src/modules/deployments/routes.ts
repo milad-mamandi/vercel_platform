@@ -31,6 +31,7 @@ const deploymentSchema = z.object({
 
 const paramsSchema = z.object({ id: z.string().cuid() });
 
+
 const serializeTemplate = (row: {
   id: string;
   name: string;

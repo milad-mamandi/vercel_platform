@@ -92,6 +92,7 @@ const worker = new Worker(
         return { skipped: true, reason: 'canceled' };
       }
 
+
       await deploymentJobsQueue.add('deploy-project', { deploymentId: deployment.id }, queueOptions.deploy);
       return { deploymentId: deployment.id, stage: 'rendered' };
     }
@@ -118,6 +119,7 @@ const worker = new Worker(
         return { skipped: true, reason: 'canceled' };
       }
 
+
       await deploymentJobsQueue.add('poll-deployment-status', { deploymentId: deployment.id, pollCount: 1 }, { ...queueOptions.poll, delay: 1500 });
 
       return { deploymentId: deployment.id, stage: 'deploying' };
@@ -131,6 +133,9 @@ const worker = new Worker(
 
       if (pollCount < 2) {
         await appendLog(deployment.id, `Poll attempt ${pollCount}: deployment still building`);
+        if (await isDeploymentCanceled(deployment.id)) {
+          return { skipped: true, reason: 'canceled' };
+        }
         await deploymentJobsQueue.add('poll-deployment-status', { deploymentId: deployment.id, pollCount: pollCount + 1 }, { ...queueOptions.poll, delay: 1500 });
         return { deploymentId: deployment.id, stage: 'polling', pollCount };
       }
@@ -140,6 +145,9 @@ const worker = new Worker(
         return { skipped: true, reason: 'canceled' };
       }
       await appendLog(deployment.id, 'Deployment reached READY status');
+      if (await isDeploymentCanceled(deployment.id)) {
+        return { skipped: true, reason: 'canceled' };
+      }
       await connectionJobsQueue.add(
         'sync-vercel-usage',
         { connectionId: deployment.connectionId, queuedAt: new Date().toISOString(), triggeredBy: 'deployment-ready' },
