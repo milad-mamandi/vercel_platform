@@ -64,6 +64,30 @@ type DeploymentJob = {
   updatedAt: string;
 };
 
+type SimulatorRun = {
+  id: string;
+  name: string;
+  status: string;
+  currentStep: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+};
+
+type AdminUser = {
+  id: string;
+  email: string;
+  roles: string[];
+};
+
+type QuotaRule = {
+  id: string;
+  serviceName: string;
+  defaultLimit: number;
+  unit: string;
+  warningAtPct: number;
+  criticalAtPct: number;
+};
+
 type UsageSummary = {
   hasData: boolean;
   services: Array<{
@@ -110,6 +134,14 @@ const App = () => {
   const [selectedConnectionId, setSelectedConnectionId] = useState('');
   const [deploymentPayload, setDeploymentPayload] = useState('{"siteTitle":"Campaign A"}');
   const [message, setMessage] = useState('');
+  const [simulations, setSimulations] = useState<SimulatorRun[]>([]);
+  const [simulationName, setSimulationName] = useState('Onboarding flow');
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [quotaRules, setQuotaRules] = useState<QuotaRule[]>([]);
+  const [quotaServiceName, setQuotaServiceName] = useState('bandwidth');
+  const [quotaDefaultLimit, setQuotaDefaultLimit] = useState('1000');
+  const [seedEmail, setSeedEmail] = useState('');
+  const [seedKey, setSeedKey] = useState('');
 
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${session?.token ?? ''}`, 'Content-Type': 'application/json' }), [session?.token]);
 
@@ -144,6 +176,24 @@ const App = () => {
     setDeployments((await response.json()) as DeploymentJob[]);
   }, [authHeaders, session]);
 
+  const loadSimulations = useCallback(async () => {
+    if (!session) return;
+    const response = await fetch(`${API_BASE}/api/simulations`, { headers: authHeaders });
+    if (response.ok) {
+      setSimulations((await response.json()) as SimulatorRun[]);
+    }
+  }, [authHeaders, session]);
+
+  const loadAdminData = useCallback(async () => {
+    if (!session || !session.user.roles.includes('admin')) return;
+    const [usersResponse, quotaResponse] = await Promise.all([
+      fetch(`${API_BASE}/api/admin/users`, { headers: authHeaders }),
+      fetch(`${API_BASE}/api/admin/quota-rules`, { headers: authHeaders })
+    ]);
+    if (usersResponse.ok) setAdminUsers((await usersResponse.json()) as AdminUser[]);
+    if (quotaResponse.ok) setQuotaRules((await quotaResponse.json()) as QuotaRule[]);
+  }, [authHeaders, session]);
+
   const loadUsageSummary = useCallback(async () => {
     if (!session) return;
     const summaries = await Promise.all(
@@ -156,8 +206,10 @@ const App = () => {
   }, [authHeaders, connections, session]);
 
   useEffect(() => {
-    Promise.all([loadConnections(), loadTemplates(), loadDeployments()]).catch((error: Error) => setMessage(error.message));
-  }, [loadConnections, loadDeployments, loadTemplates]);
+    Promise.all([loadConnections(), loadTemplates(), loadDeployments(), loadSimulations(), loadAdminData()]).catch((error: Error) =>
+      setMessage(error.message)
+    );
+  }, [loadAdminData, loadConnections, loadDeployments, loadSimulations, loadTemplates]);
 
   useEffect(() => {
     if (selectedTemplateId) {
@@ -227,7 +279,7 @@ const App = () => {
     const parsedPayload = JSON.parse(deploymentPayload) as Record<string, unknown>;
     const response = await fetch(`${API_BASE}/api/deployments`, {
       method: 'POST',
-      headers: authHeaders,
+      headers: { ...authHeaders, 'Idempotency-Key': `${selectedTemplateId}-${deploymentName}-${selectedConnectionId}` },
       body: JSON.stringify({
         templateId: selectedTemplateId,
         templateVersionId: selectedTemplateVersionId || undefined,
@@ -246,6 +298,12 @@ const App = () => {
   const retryDeployment = async (deploymentId: string) => {
     const response = await fetch(`${API_BASE}/api/deployments/${deploymentId}/retry`, { method: 'POST', headers: authHeaders });
     if (!response.ok) return setMessage('Retry failed');
+    await loadDeployments();
+  };
+
+  const cancelDeployment = async (deploymentId: string) => {
+    const response = await fetch(`${API_BASE}/api/deployments/${deploymentId}/cancel`, { method: 'POST', headers: authHeaders });
+    if (!response.ok) return setMessage('Cancel failed');
     await loadDeployments();
   };
 
@@ -269,6 +327,7 @@ const App = () => {
           <section style={cardStyle}>
             <h2>Session</h2>
             <p>{session.user.email}</p>
+            <p>Roles: {session.user.roles.join(', ')}</p>
             <button onClick={() => setSession(null)}>Log out</button>
           </section>
 
@@ -377,12 +436,104 @@ const App = () => {
                     <td>{deployment.name}</td>
                     <td>v{deployment.templateVersion?.version ?? 'n/a'}</td>
                     <td>{deployment.status}</td>
-                    <td><button onClick={() => void retryDeployment(deployment.id)}>Retry same version</button></td>
+                    <td style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={() => void retryDeployment(deployment.id)}>Retry same version</button>
+                      <button onClick={() => void cancelDeployment(deployment.id)}>Cancel</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </section>
+
+          <section style={{ ...cardStyle, marginTop: 12 }}>
+            <h2>Simulator lab</h2>
+            <form
+              onSubmit={async (event) => {
+                event.preventDefault();
+                const response = await fetch(`${API_BASE}/api/simulations`, {
+                  method: 'POST',
+                  headers: authHeaders,
+                  body: JSON.stringify({ name: simulationName })
+                });
+                if (!response.ok) return setMessage('Failed to create simulation');
+                await loadSimulations();
+              }}
+              style={{ display: 'flex', gap: 8 }}
+            >
+              <input value={simulationName} onChange={(event) => setSimulationName(event.target.value)} placeholder="Simulation name" />
+              <button type="submit">Create run</button>
+            </form>
+            {simulations.map((run) => (
+              <p key={run.id}>
+                {run.name}: {run.status} {run.currentStep ? `(step ${run.currentStep})` : ''}
+              </p>
+            ))}
+          </section>
+
+          {session.user.roles.includes('admin') ? (
+            <section style={{ ...cardStyle, marginTop: 12 }}>
+              <h2>Admin controls</h2>
+              <h3>Seed admin workflow</h3>
+              <form
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  const response = await fetch(`${API_BASE}/api/auth/seed-admin`, {
+                    method: 'POST',
+                    headers: authHeaders,
+                    body: JSON.stringify({ email: seedEmail, seedKey })
+                  });
+                  if (!response.ok) return setMessage('Seed admin request failed');
+                  await loadAdminData();
+                }}
+                style={{ display: 'flex', gap: 8 }}
+              >
+                <input value={seedEmail} onChange={(event) => setSeedEmail(event.target.value)} placeholder="user@example.com" />
+                <input value={seedKey} onChange={(event) => setSeedKey(event.target.value)} placeholder="seed key" />
+                <button type="submit">Assign admin</button>
+              </form>
+              <h3>Role management</h3>
+              {adminUsers.map((user) => (
+                <p key={user.id}>
+                  {user.email} ({user.roles.join(', ')}){' '}
+                  <button
+                    onClick={async () => {
+                      await fetch(`${API_BASE}/api/admin/users/${user.id}/roles`, {
+                        method: 'POST',
+                        headers: authHeaders,
+                        body: JSON.stringify({ role: 'viewer' })
+                      });
+                      await loadAdminData();
+                    }}
+                  >
+                    +viewer
+                  </button>
+                </p>
+              ))}
+              <h3>Quota rules</h3>
+              <form
+                onSubmit={async (event) => {
+                  event.preventDefault();
+                  await fetch(`${API_BASE}/api/admin/quota-rules/${encodeURIComponent(quotaServiceName)}`, {
+                    method: 'PUT',
+                    headers: authHeaders,
+                    body: JSON.stringify({ defaultLimit: Number(quotaDefaultLimit), unit: 'count', warningAtPct: 80, criticalAtPct: 95 })
+                  });
+                  await loadAdminData();
+                }}
+                style={{ display: 'flex', gap: 8 }}
+              >
+                <input value={quotaServiceName} onChange={(event) => setQuotaServiceName(event.target.value)} placeholder="service name" />
+                <input value={quotaDefaultLimit} onChange={(event) => setQuotaDefaultLimit(event.target.value)} placeholder="limit" />
+                <button type="submit">Upsert rule</button>
+              </form>
+              {quotaRules.map((rule) => (
+                <p key={rule.id}>
+                  {rule.serviceName}: {rule.defaultLimit} {rule.unit} (warn {rule.warningAtPct}% / crit {rule.criticalAtPct}%)
+                </p>
+              ))}
+            </section>
+          ) : null}
         </>
       )}
       {message ? <p>{message}</p> : null}

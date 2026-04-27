@@ -19,6 +19,7 @@ model User {
   vercelConnections VercelConnection[]
   templates         DeploymentTemplate[]
   deployments       DeploymentJob[]
+  simulatorRuns     SimulatorRun[]
 }
 
 model Role {
@@ -132,6 +133,8 @@ model DeploymentJob {
   providerDeploymentId String?
   logs                 Json?
   errorMessage         String?
+  idempotencyKey       String?
+  canceledAt           DateTime?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
@@ -145,6 +148,7 @@ model DeploymentJob {
   @@index([templateVersionId])
   @@index([connectionId])
   @@index([status])
+  @@unique([userId, idempotencyKey])
 }
 
 model UsageSnapshot {
@@ -182,4 +186,34 @@ model UsageService {
 
   @@index([snapshotId])
   @@index([connectionId, serviceName, createdAt])
+}
+
+model QuotaRule {
+  id            String   @id @default(cuid())
+  serviceName   String   @unique
+  defaultLimit  Float
+  unit          String
+  warningAtPct  Float    @default(80)
+  criticalAtPct Float    @default(95)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model SimulatorRun {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  status          String   @default("queued")
+  providerConfig  Json?
+  stateData       Json?
+  logs            Json?
+  currentStep     String?
+  errorMessage    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status])
 }
