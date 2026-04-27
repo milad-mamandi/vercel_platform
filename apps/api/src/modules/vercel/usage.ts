@@ -82,6 +82,12 @@ const mockUsagePayload = (): RawUsagePayload => ({
   ]
 });
 
+const isCliNotFoundError = (error: unknown) =>
+  typeof error === 'object' &&
+  error !== null &&
+  'code' in error &&
+  (error as NodeJS.ErrnoException).code === 'ENOENT';
+
 export const syncUsageSnapshot = async (prisma: PrismaClient, connectionId: string) => {
   const connection = await prisma.vercelConnection.findUnique({ where: { id: connectionId } });
   if (!connection) {
@@ -97,7 +103,10 @@ export const syncUsageSnapshot = async (prisma: PrismaClient, connectionId: stri
       maxBuffer: 4 * 1024 * 1024
     });
     payload = parseUsagePayload(stdout);
-  } catch {
+  } catch (error) {
+    if (!isCliNotFoundError(error)) {
+      throw error;
+    }
     payload = mockUsagePayload();
   }
 
