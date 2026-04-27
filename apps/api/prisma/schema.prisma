@@ -8,14 +8,15 @@ datasource db {
 }
 
 model User {
-  id           String      @id @default(cuid())
-  email        String      @unique
-  passwordHash String
-  displayName  String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  userRoles    UserRole[]
-  auditEvents  AuditEvent[] @relation("AuditActor")
+  id                String             @id @default(cuid())
+  email             String             @unique
+  passwordHash      String
+  displayName       String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  userRoles         UserRole[]
+  auditEvents       AuditEvent[]       @relation("AuditActor")
+  vercelConnections VercelConnection[]
 }
 
 model Role {
@@ -51,4 +52,23 @@ model AuditEvent {
 
   @@index([actorUserId])
   @@index([entityType, entityId])
+}
+
+model VercelConnection {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  teamId          String?
+  teamSlug        String?
+  plan            String?
+  encryptedToken  String
+  tokenStatus     String   @default("valid")
+  lastValidatedAt DateTime?
+  lastUsageSyncAt DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

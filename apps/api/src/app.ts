@@ -7,6 +7,7 @@ import auditPlugin from './plugins/audit.js';
 import queuesPlugin from './plugins/queues.js';
 import healthRoutes from './modules/health/routes.js';
 import authRoutes from './modules/auth/routes.js';
+import vercelRoutes from './modules/vercel/routes.js';
 
 export const buildApp = () => {
   const app = Fastify({ logger: true });
@@ -20,6 +21,7 @@ export const buildApp = () => {
 
   app.register(healthRoutes);
   app.register(authRoutes);
+  app.register(vercelRoutes);
 
   return app;
 };
