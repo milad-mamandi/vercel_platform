@@ -30,6 +30,14 @@ const deploymentSchema = z.object({
 
 const paramsSchema = z.object({ id: z.string().cuid() });
 
+const isUniqueConstraintError = (error: unknown) => {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return false;
+  }
+
+  return (error as { code?: string }).code === 'P2002';
+};
+
 const serializeTemplate = (row: {
   id: string;
   name: string;
@@ -330,7 +338,36 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({ message: (error as Error).message });
       }
 
-      if (idempotencyKey) {
+      let deployment;
+      try {
+        deployment = await instance.prisma.deploymentJob.create({
+          data: {
+            userId,
+            templateId: body.templateId,
+            templateVersionId: templateVersion.id,
+            connectionId: body.connectionId,
+            name: body.name,
+            idempotencyKey,
+            target: body.target,
+            status: 'queued',
+            renderPayload: body.renderPayload as object | undefined,
+            logs: [{ at: new Date().toISOString(), message: `Deployment queued for template version ${templateVersion.version}` }]
+          },
+          include: {
+            template: { select: { name: true } },
+            templateVersion: { select: { version: true } },
+            connection: { select: { name: true } }
+          }
+        });
+      } catch (error) {
+        const isIdempotencyConflict =
+          idempotencyKey &&
+          isUniqueConstraintError(error);
+
+        if (!isIdempotencyConflict) {
+          throw error;
+        }
+
         const existing = await instance.prisma.deploymentJob.findFirst({
           where: { userId, idempotencyKey },
           include: {
@@ -340,30 +377,12 @@ const deploymentsRoutes: FastifyPluginAsync = async (app) => {
           }
         });
 
-        if (existing) {
-          return reply.status(200).send(serializeDeployment(existing));
+        if (!existing) {
+          throw error;
         }
-      }
 
-      const deployment = await instance.prisma.deploymentJob.create({
-        data: {
-          userId,
-          templateId: body.templateId,
-          templateVersionId: templateVersion.id,
-          connectionId: body.connectionId,
-          name: body.name,
-          idempotencyKey,
-          target: body.target,
-          status: 'queued',
-          renderPayload: body.renderPayload as object | undefined,
-          logs: [{ at: new Date().toISOString(), message: `Deployment queued for template version ${templateVersion.version}` }]
-        },
-        include: {
-          template: { select: { name: true } },
-          templateVersion: { select: { version: true } },
-          connection: { select: { name: true } }
-        }
-      });
+        return reply.status(200).send(serializeDeployment(existing));
+      }
 
       await instance.queues.deploymentQueue.add(
         'render-template',
